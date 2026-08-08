@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Secure Upload</title>
+<meta name="theme-color" content="#112240" />
+<meta name="description" content="Capture and upload photos to the server." />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Secure Upload" />
+
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="offlineBanner" class="banner banner--hidden" role="status">You're offline. Photos are saved on this device and upload automatically once you're back online.</div>
+
+<!-- ===================== SETTINGS SCREEN ===================== -->
+<section id="settingsScreen" class="screen">
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="" class="brand__icon" />
+      <span class="brand__name">Secure Upload</span>
+    </div>
+  </header>
+
+  <main class="content">
+    <h1 class="page-title">Set up your device</h1>
+    <p class="page-sub">These details are saved on this device only. You won't need to enter them again.</p>
+
+    <form id="settingsForm" novalidate>
+      <label class="field">
+        <span class="field__label">Server URL <em>required</em></span>
+        <input id="serverUrl" name="serverUrl" type="url" inputmode="url" placeholder="https://secure.vnam.org" autocomplete="off" required />
+      </label>
+
+      <label class="field">
+        <span class="field__label">API Key <em>required</em></span>
+        <div class="field__row">
+          <input id="apiKey" name="apiKey" type="password" placeholder="Paste the shared key" autocomplete="off" required />
+          <button type="button" id="toggleKeyVisibility" class="icon-btn" aria-label="Show API key">👁</button>
+        </div>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Employee Identifier <em>required</em></span>
+        <input id="employeeId" name="employeeId" type="text" placeholder="e.g. 10234 or J. Smith" autocomplete="off" required />
+      </label>
+
+      <div id="testResult" class="test-result" aria-live="polite"></div>
+
+      <div class="button-row">
+        <button type="button" id="testConnectionBtn" class="btn btn--ghost">Test connection</button>
+        <button type="submit" id="saveSettingsBtn" class="btn btn--primary">Save &amp; continue</button>
+      </div>
+    </form>
+  </main>
+</section>
+
+<!-- ===================== CAPTURE SCREEN ===================== -->
+<section id="captureScreen" class="screen screen--hidden">
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="" class="brand__icon" />
+      <span class="brand__name">Secure Upload</span>
+      <span id="pendingPill" class="pending-pill pending-pill--hidden">0</span>
+    </div>
+    <button id="openSettingsBtn" class="icon-btn" aria-label="Settings">⚙</button>
+  </header>
+
+  <div id="employeeBadge" class="employee-badge"></div>
+
+  <!-- Mode toggle -->
+  <div class="mode-toggle">
+    <button id="modeSingle" class="mode-btn mode-btn--active">Single PDF</button>
+    <button id="modeBatch" class="mode-btn">Multipage PDF</button>
+  </div>
+
+  <main class="content content--capture">
+
+    <div id="preview" class="preview preview--empty">
+      <img id="previewImg" alt="Selected photo preview" />
+      <p id="previewEmpty" class="preview__empty-text">No photo selected yet</p>
+    </div>
+
+    <div id="statusMsg" class="status-msg" aria-live="polite"></div>
+
+    <div id="preCaptureActions" class="actions">
+      <button id="shutterBtn" class="shutter-btn" aria-label="Take photo">
+        <span class="shutter-btn__ring"></span>
+      </button>
+      <button id="galleryBtn" class="btn btn--text">Choose from library instead</button>
+    </div>
+
+    <!-- Single-photo confirm row -->
+    <div id="postCaptureActions" class="actions actions--hidden">
+      <div class="button-row">
+        <button id="retakeBtn" class="btn btn--ghost">Retake</button>
+        <button id="uploadBtn" class="btn btn--primary">Save photo</button>
+      </div>
+    </div>
+
+    <!-- Batch-mode confirm row (shown after each capture in batch mode) -->
+    <div id="batchCaptureActions" class="actions actions--hidden">
+      <div class="button-row">
+        <button id="batchDiscardBtn" class="btn btn--ghost">Discard</button>
+        <button id="batchAddBtn" class="btn btn--primary">Add to batch</button>
+      </div>
+    </div>
+
+    <!-- Batch strip (visible in PDF batch mode whenever ≥1 photo accumulated) -->
+    <section id="batchStrip" class="batch-strip batch-strip--hidden">
+      <div class="batch-strip__header">
+        <span id="batchCount" class="batch-strip__count">0 photos</span>
+        <button id="clearBatchBtn" class="btn btn--text" style="padding:4px 6px;font-size:12px">Clear all</button>
+      </div>
+      <div id="batchThumbRow" class="batch-thumb-row"></div>
+      <div id="pdfProgressWrap" class="pdf-progress-wrap pdf-progress-wrap--hidden">
+        <div class="progress-track"><div id="pdfProgressBar" class="progress-bar"></div></div>
+        <span id="pdfProgressLabel" class="progress-label">Building PDF…</span>
+      </div>
+      <button id="createPdfBtn" class="btn btn--primary" style="width:100%;margin-top:10px">
+        Create PDF &amp; upload
+      </button>
+    </section>
+
+    <section class="queue-section">
+      <div class="queue-header">
+        <span class="queue-title">Upload queue <span id="queueCount" class="queue-count">0</span></span>
+        <button id="retryAllBtn" class="btn btn--text retry-all-btn" hidden>Retry failed</button>
+      </div>
+      <ul id="queueList" class="queue-list"></ul>
+      <p id="queueEmpty" class="empty-queue">Nothing waiting to upload</p>
+    </section>
+  </main>
+
+  <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden />
+  <input type="file" id="libraryInput" accept="image/*" hidden />
+</section>
+
+<button id="installBtn" class="install-btn install-btn--hidden">Install app</button>
+
+<script src="pdf-lib.min.js"></script>
+<script src="idb-queue.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

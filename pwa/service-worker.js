@@ -1,0 +1,69 @@
+importScripts('idb-queue.js');
+
+const CACHE_NAME = 'photo-upload-shell-v3';
+const SHELL_FILES = [
+  './',
+  './index.html',
+  './style.css',
+  './app.js',
+  './idb-queue.js',
+  './pdf-lib.min.js',
+  './manifest.json',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_FILES))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    )
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+
+  // Only handle GET requests for our own app shell. Everything else
+  // (uploads, health checks, cross-origin API calls) goes straight to the network.
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) {
+    return;
+  }
+
+  event.respondWith(
+    caches.match(req).then((cached) => {
+      const networkFetch = fetch(req)
+        .then((res) => {
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => cached);
+      return cached || networkFetch;
+    })
+  );
+});
+
+// Fired by the browser/OS when connectivity returns, even if no tab is open
+// (supported on Android Chrome/Edge and desktop Chromium; iOS Safari does not
+// support Background Sync, so there the queue flushes when the app is reopened).
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'flush-photo-queue') {
+    event.waitUntil(pqFlush().then(notifyClients));
+  }
+});
+
+async function notifyClients() {
+  const clients = await self.clients.matchAll();
+  clients.forEach((c) => c.postMessage({ type: 'queue-updated' }));
+}
