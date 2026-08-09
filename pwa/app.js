@@ -1,8 +1,9 @@
 (() => {
   'use strict';
 
-  const SETTINGS_KEY = 'photoUpload.settings.v1';
-  const MODE_KEY = 'photoUpload.mode.v1';
+  const SETTINGS_KEY    = 'photoUpload.settings.v1';
+  const MODE_KEY        = 'photoUpload.mode.v1';
+  const CONFIG_HASH_KEY = 'photoUpload.configHash.v1';
   const FLUSH_INTERVAL_MS = 25000;
   const SYNC_TAG = 'flush-photo-queue';
 
@@ -67,6 +68,18 @@
   let swRegistration   = null;
   const queueThumbUrls = new Map();
 
+  // Crop modal
+  const cropModal      = document.getElementById('cropModal');
+  const cropImg        = document.getElementById('cropImg');
+  const cropCancelBtn  = document.getElementById('cropCancelBtn');
+  const cropConfirmBtn = document.getElementById('cropConfirmBtn');
+  const cropRotateCCWBtn = document.getElementById('cropRotateCCWBtn');
+  const cropRotateCWBtn  = document.getElementById('cropRotateCWBtn');
+  const cropFlipHBtn     = document.getElementById('cropFlipHBtn');
+  const cropResetBtn     = document.getElementById('cropResetBtn');
+  let cropperInstance  = null;
+  let cropResolve      = null;   // resolves with cropped Blob or null (cancel)
+
   // ---------- Settings ----------
   function loadSettings() {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; }
@@ -93,6 +106,76 @@
   }
   modeSingleBtn.addEventListener('click', () => setMode(false));
   modeBatchBtn.addEventListener('click',  () => setMode(true));
+
+  // ---------- Crop modal ----------
+  // Returns a Promise<Blob|null>. Null means the user cancelled.
+  let _cropObjectUrl = null;   // kept alive until closeCropper so Cropper.js can re-read it
+
+  function openCropper(sourceBlob) {
+    return new Promise(resolve => {
+      cropResolve = resolve;
+
+      if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
+      if (_cropObjectUrl) { URL.revokeObjectURL(_cropObjectUrl); _cropObjectUrl = null; }
+
+      // Reset ratio buttons
+      document.querySelectorAll('.crop-ratio-btn').forEach(b => b.classList.remove('crop-ratio-btn--active'));
+      document.getElementById('cropFreeBtn').classList.add('crop-ratio-btn--active');
+
+      _cropObjectUrl = URL.createObjectURL(sourceBlob);
+      cropImg.src = _cropObjectUrl;
+      cropModal.classList.remove('crop-modal--hidden');
+
+      // Initialise Cropper.js via its own 'ready' event so we know the image
+      // is fully decoded and the container has layout dimensions.
+      cropperInstance = new Cropper(cropImg, {
+        viewMode: 1,
+        autoCropArea: 0.95,
+        responsive: true,
+        restore: false,
+        guides: true,
+        center: true,
+        highlight: false,
+        cropBoxMovable: true,
+        cropBoxResizable: true,
+        toggleDragModeOnDblclick: false,
+      });
+    });
+  }
+
+  function closeCropper(result) {
+    cropModal.classList.add('crop-modal--hidden');
+    if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
+    if (_cropObjectUrl) { URL.revokeObjectURL(_cropObjectUrl); _cropObjectUrl = null; }
+    cropImg.src = '';
+    if (cropResolve) { cropResolve(result); cropResolve = null; }
+  }
+
+  cropCancelBtn.addEventListener('click', () => closeCropper(null));
+
+  cropConfirmBtn.addEventListener('click', () => {
+    if (!cropperInstance) { closeCropper(null); return; }
+    const canvas = cropperInstance.getCroppedCanvas({ maxWidth: 4096, maxHeight: 4096, fillColor: '#fff' });
+    canvas.toBlob(blob => closeCropper(blob), 'image/jpeg', 0.92);
+  });
+
+  cropRotateCCWBtn.addEventListener('click', () => cropperInstance && cropperInstance.rotate(-90));
+  cropRotateCWBtn.addEventListener('click',  () => cropperInstance && cropperInstance.rotate(90));
+  cropFlipHBtn.addEventListener('click', () => {
+    if (!cropperInstance) return;
+    const d = cropperInstance.getData();
+    cropperInstance.scaleX(-1 * (d.scaleX || 1));
+  });
+  cropResetBtn.addEventListener('click', () => cropperInstance && cropperInstance.reset());
+
+  document.querySelectorAll('.crop-ratio-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.crop-ratio-btn').forEach(b => b.classList.remove('crop-ratio-btn--active'));
+      btn.classList.add('crop-ratio-btn--active');
+      const ratio = parseFloat(btn.dataset.ratio);
+      cropperInstance && cropperInstance.setAspectRatio(isNaN(ratio) ? NaN : ratio);
+    });
+  });
 
   // ---------- Screen switching ----------
   function showSettingsScreen(prefill) {
@@ -189,8 +272,12 @@
       return;
     }
     await saveSettings(s);
+    localStorage.removeItem(CONFIG_HASH_KEY);
+    configChanged = false;
+    updateBanner.classList.add('banner--hidden');
     showCaptureScreen();
     attemptFlush();
+    checkConfigVersion(); // store the server's current hash baseline immediately
   });
 
   openSettingsBtn.addEventListener('click', () => showSettingsScreen());
@@ -242,12 +329,15 @@
     const s = loadSettings();
     if (!settingsComplete(s)) { showSettingsScreen(s); return; }
 
+    const croppedBlob = await openCropper(currentFile);
+    if (!croppedBlob) return; // user cancelled crop
+
     uploadBtn.disabled = true;
     statusMsg.textContent = 'Building PDF…';
     statusMsg.className   = 'status-msg';
 
     try {
-      const pdfBytes = await buildPdf([{ blob: currentFile, previewUrl: currentPreviewUrl }]);
+      const pdfBytes = await buildPdf([{ blob: croppedBlob, previewUrl: null }]);
       const pdfBlob  = new Blob([pdfBytes], { type: 'application/pdf' });
       const ts       = new Date().toISOString().replace(/[:.]/g, '-');
       const safe     = s.employeeId.trim().replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 64) || 'employee';
@@ -283,12 +373,14 @@
   // ---------- Batch: add current shot ----------
   batchDiscardBtn.addEventListener('click', () => resetCapture());
 
-  batchAddBtn.addEventListener('click', () => {
+  batchAddBtn.addEventListener('click', async () => {
     if (!currentFile) return;
-    batchPhotos.push({ blob: currentFile, previewUrl: currentPreviewUrl });
-    // Don't revoke — we still need the preview URL for the strip thumbnail.
-    currentFile       = null;
-    currentPreviewUrl = null;
+
+    const croppedBlob = await openCropper(currentFile);
+    if (!croppedBlob) return; // user cancelled
+
+    const thumbUrl = URL.createObjectURL(croppedBlob);
+    batchPhotos.push({ blob: croppedBlob, previewUrl: thumbUrl });
     updateBatchStrip();
     resetCapture();
     statusMsg.textContent = `Photo ${batchPhotos.length} added to batch.`;
@@ -537,7 +629,114 @@
   });
   setInterval(attemptFlush, FLUSH_INTERVAL_MS);
 
-  // ---------- Install prompt ----------
+  // ---------- Auto-update manager ----------
+  const updateBanner    = document.getElementById('updateBanner');
+  const updateBannerMsg = document.getElementById('updateBannerMsg');
+  const updateNowBtn    = document.getElementById('updateNowBtn');
+
+  const CONFIG_POLL_MS    = 5 * 60 * 1000;   // poll /api/version every 5 min
+  const SW_CHECK_MS       = 60 * 1000;        // nudge SW to check for updates every 60 s
+
+  let pendingSwUpdate = false;  // a new SW is waiting
+  let configChanged   = false;  // server config fingerprint changed
+
+  // Show the update banner with appropriate message. If the queue is empty
+  // and the trigger is a new SW, auto-reload silently. Otherwise surface the
+  // banner so the user can choose when to update (after their current upload).
+  async function handleUpdateAvailable(reason) {
+    const queueItems = await pqGetAll();
+    const queued     = queueItems.filter(r => r.status !== 'uploaded').length;
+
+    if (reason === 'sw') {
+      updateBannerMsg.textContent = queued > 0
+        ? `A new version is ready. Tap to update after your ${queued} pending upload${queued > 1 ? 's finish' : ' finishes'}.`
+        : 'A new version is ready.';
+    } else {
+      updateBannerMsg.textContent = queued > 0
+        ? 'Server settings have changed. Tap to reload after your uploads finish.'
+        : 'Server settings have changed — reloading…';
+    }
+
+    updateBanner.classList.remove('banner--hidden');
+
+    // Auto-reload only when nothing is at risk of being lost.
+    if (queued === 0) {
+      await new Promise(r => setTimeout(r, reason === 'sw' ? 400 : 1200));
+      applyUpdate();
+    }
+  }
+
+  function applyUpdate() {
+    if (pendingSwUpdate && swRegistration && swRegistration.waiting) {
+      // Tell the waiting SW to activate; it will broadcast SW_UPDATED once it
+      // has claimed all clients, and the message handler below reloads the page.
+      swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    } else {
+      // Config-only change or SW already active — a plain reload picks up any
+      // new cached assets and re-runs settings validation.
+      location.reload();
+    }
+  }
+
+  updateNowBtn.addEventListener('click', applyUpdate);
+
+  // SW update detection — fires when a new SW finishes downloading.
+  function trackSwRegistration(reg) {
+    function onWaiting() {
+      pendingSwUpdate = true;
+      handleUpdateAvailable('sw');
+    }
+    if (reg.waiting) { onWaiting(); return; }
+    reg.addEventListener('updatefound', () => {
+      const newSw = reg.installing;
+      if (!newSw) return;
+      newSw.addEventListener('statechange', () => {
+        if (newSw.state === 'installed' && navigator.serviceWorker.controller) {
+          onWaiting();
+        }
+      });
+    });
+  }
+
+  // Reload when the new SW broadcasts SW_UPDATED after claiming clients.
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (!event.data) return;
+    if (event.data.type === 'queue-updated') { renderQueue(); return; }
+    if (event.data.type === 'SW_UPDATED')    { location.reload(); }
+  });
+
+  // Periodically nudge the SW to check for updates (browser normally does this
+  // on navigation, which rarely happens in a single-page PWA).
+  function startSwUpdatePolling(reg) {
+    setInterval(() => reg.update().catch(() => {}), SW_CHECK_MS);
+  }
+
+  // Config version polling — detect server restarts, key rotations, etc.
+  async function checkConfigVersion() {
+    const s = loadSettings();
+    if (!settingsComplete(s)) return;
+    try {
+      const res = await fetch(`${s.serverUrl}/api/version`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const { configHash } = await res.json();
+      const stored = localStorage.getItem(CONFIG_HASH_KEY);
+      if (!stored) {
+        // First time seeing this server — just store the hash, no alert.
+        localStorage.setItem(CONFIG_HASH_KEY, configHash);
+        return;
+      }
+      if (stored !== configHash && !configChanged) {
+        configChanged = true;
+        localStorage.setItem(CONFIG_HASH_KEY, configHash);
+        handleUpdateAvailable('config');
+      }
+    } catch { /* offline or server unreachable — ignore */ }
+  }
+
+  function startConfigPolling() {
+    checkConfigVersion();
+    setInterval(checkConfigVersion, CONFIG_POLL_MS);
+  }
   let deferredInstallPrompt = null;
   window.addEventListener('beforeinstallprompt', e => {
     e.preventDefault();
@@ -556,13 +755,17 @@
   // ---------- Service worker ----------
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', async () => {
-      try { swRegistration = await navigator.serviceWorker.register('service-worker.js'); }
-      catch (err) { console.warn('SW registration failed:', err); }
-    });
-    navigator.serviceWorker.addEventListener('message', e => {
-      if (e.data && e.data.type === 'queue-updated') renderQueue();
+      try {
+        swRegistration = await navigator.serviceWorker.register('service-worker.js');
+        trackSwRegistration(swRegistration);
+        startSwUpdatePolling(swRegistration);
+      } catch (err) {
+        console.warn('SW registration failed:', err);
+      }
     });
   }
+
+  startConfigPolling();
 
   updateOnlineStatus();
   init();

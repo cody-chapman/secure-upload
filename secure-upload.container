@@ -3,8 +3,8 @@ Description=Arch Linux NodeJS Sync Script container
 
 [Container]
 # 1. Use the official base image
-Image=localhost/photos:latest
-ContainerName=photos
+Image=ghcr.io/cody-chapman/secure-upload:latest
+ContainerName=secure-upload
 
 # 2. Tell systemd it is running inside an OCI container
 Environment=container=podman SYSTEMD_LOG_TARGET=console
@@ -18,7 +18,7 @@ AddCapability=sys_admin
 # CRITICAL: Grant permission to mount filesystems
 AddCapability=CAP_SYS_ADMIN
 AddCapability=DAC_READ_SEARCH
-PublishPort=3000:3000
+PublishPort=3001:3000
 # CRITICAL: Allow the container to use the host's CIFS kernel worker
 AddDevice=/dev/fuse
 

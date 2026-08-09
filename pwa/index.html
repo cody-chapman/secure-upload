@@ -9,15 +9,21 @@
 
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Secure Upload" />
 
+<link rel="stylesheet" href="cropper.min.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
 <div id="offlineBanner" class="banner banner--hidden" role="status">You're offline. Photos are saved on this device and upload automatically once you're back online.</div>
+<div id="updateBanner" class="banner banner--update banner--hidden" role="status">
+  <span id="updateBannerMsg">A new version is available.</span>
+  <button id="updateNowBtn" class="banner__btn">Update now</button>
+</div>
 
 <!-- ===================== SETTINGS SCREEN ===================== -->
 <section id="settingsScreen" class="screen">
@@ -35,7 +41,7 @@
     <form id="settingsForm" novalidate>
       <label class="field">
         <span class="field__label">Server URL <em>required</em></span>
-        <input id="serverUrl" name="serverUrl" type="url" inputmode="url" placeholder="https://secure.vnam.org" autocomplete="off" required />
+        <input id="serverUrl" name="serverUrl" type="url" inputmode="url" placeholder="https://secure-dev.vnam.org" autocomplete="off" required />
       </label>
 
       <label class="field">
@@ -76,8 +82,8 @@
 
   <!-- Mode toggle -->
   <div class="mode-toggle">
-    <button id="modeSingle" class="mode-btn mode-btn--active">Single PDF</button>
-    <button id="modeBatch" class="mode-btn">Multipage PDF</button>
+    <button id="modeSingle" class="mode-btn mode-btn--active">Singlefile PDF</button>
+    <button id="modeBatch" class="mode-btn">Multifile PDF</button>
   </div>
 
   <main class="content content--capture">
@@ -100,7 +106,7 @@
     <div id="postCaptureActions" class="actions actions--hidden">
       <div class="button-row">
         <button id="retakeBtn" class="btn btn--ghost">Retake</button>
-        <button id="uploadBtn" class="btn btn--primary">Save photo</button>
+        <button id="uploadBtn" class="btn btn--primary">Crop &amp; use</button>
       </div>
     </div>
 
@@ -108,7 +114,7 @@
     <div id="batchCaptureActions" class="actions actions--hidden">
       <div class="button-row">
         <button id="batchDiscardBtn" class="btn btn--ghost">Discard</button>
-        <button id="batchAddBtn" class="btn btn--primary">Add to batch</button>
+        <button id="batchAddBtn" class="btn btn--primary">Crop &amp; add</button>
       </div>
     </div>
 
@@ -144,6 +150,29 @@
 
 <button id="installBtn" class="install-btn install-btn--hidden">Install app</button>
 
+<!-- ===================== CROP MODAL ===================== -->
+<div id="cropModal" class="crop-modal crop-modal--hidden" role="dialog" aria-modal="true" aria-label="Crop photo">
+  <div class="crop-modal__bar crop-modal__bar--top">
+    <button id="cropCancelBtn" class="crop-bar-btn">Cancel</button>
+    <span class="crop-modal__title">Crop photo</span>
+    <button id="cropConfirmBtn" class="crop-bar-btn crop-bar-btn--confirm">Done</button>
+  </div>
+  <div class="crop-modal__canvas-wrap">
+    <img id="cropImg" alt="" />
+  </div>
+  <div class="crop-modal__bar crop-modal__bar--bottom">
+    <button id="cropRotateCCWBtn" class="crop-tool-btn" title="Rotate left">↺</button>
+    <button id="cropRotateCWBtn"  class="crop-tool-btn" title="Rotate right">↻</button>
+    <button id="cropFlipHBtn"     class="crop-tool-btn" title="Flip horizontal">⇄</button>
+    <button id="cropResetBtn"     class="crop-tool-btn" title="Reset">⊠</button>
+    <button id="cropFreeBtn"      class="crop-tool-btn crop-ratio-btn crop-ratio-btn--active" data-ratio="NaN"  title="Free">Free</button>
+    <button id="crop11Btn"        class="crop-tool-btn crop-ratio-btn" data-ratio="1"    title="1:1">1:1</button>
+    <button id="crop43Btn"        class="crop-tool-btn crop-ratio-btn" data-ratio="1.333" title="4:3">4:3</button>
+    <button id="crop169Btn"       class="crop-tool-btn crop-ratio-btn" data-ratio="1.778" title="16:9">16∶9</button>
+  </div>
+</div>
+
+<script src="cropper.min.js"></script>
 <script src="pdf-lib.min.js"></script>
 <script src="idb-queue.js"></script>
 <script src="app.js"></script>

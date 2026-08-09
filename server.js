@@ -95,7 +95,7 @@ const EXT_BY_MIME = {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const employeeId = sanitizeSegment(req.body.employeeId, 'unknown_employee');
-    const dir = path.join(UPLOAD_DIR, dateStamp(), employeeId);
+    const dir = path.join(UPLOAD_DIR, employeeId, dateStamp());
     fs.mkdir(dir, { recursive: true }, (err) => cb(err, dir));
   },
   filename: (req, file, cb) => {
@@ -118,9 +118,23 @@ const upload = multer({
   },
 });
 
-// ---- Routes ----
+// Config fingerprint — a hash of the things that matter to the client.
+// Changes whenever the API key rotates, the upload dir changes, or the server restarts.
+// The client polls this; if the hash changes it knows to prompt the user to refresh settings.
+const CONFIG_HASH = crypto
+  .createHash('sha256')
+  .update(`${API_KEY}:${UPLOAD_DIR}:${Date.now()}`)
+  .digest('hex')
+  .slice(0, 16);
+
 app.get('/api/health', checkAuth, (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
+});
+
+// Intentionally unauthenticated — clients need to detect a config change even
+// before they know the new key. The hash reveals nothing about the key itself.
+app.get('/api/version', (req, res) => {
+  res.json({ configHash: CONFIG_HASH });
 });
 
 app.post('/api/upload', checkAuth, (req, res) => {
