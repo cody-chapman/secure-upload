@@ -1,7 +1,7 @@
 {
   "name": "Secure Upload",
   "short_name": "Secure Upload",
-  "description": "Capture photos and upload them directly to the server.",
+  "description": "Capture and securely upload photos.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

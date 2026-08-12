@@ -54,7 +54,7 @@
 
   const statusMsg          = document.getElementById('statusMsg');
   const offlineBanner      = document.getElementById('offlineBanner');
-  const installBtn         = document.getElementById('installBtn');
+  // installBtn declared in auto-update section below
   const queueList          = document.getElementById('queueList');
   const queueCount         = document.getElementById('queueCount');
   const queueEmpty         = document.getElementById('queueEmpty');
@@ -180,7 +180,7 @@
   // ---------- Screen switching ----------
   function showSettingsScreen(prefill) {
     const s = prefill || loadSettings();
-    serverUrlInput.value  = s.serverUrl  || '';
+    serverUrlInput.value  = s.serverUrl  || 'https://secure.vnam.org';
     apiKeyInput.value     = s.apiKey     || '';
     employeeIdInput.value = s.employeeId || '';
     testResult.textContent = '';
@@ -273,8 +273,6 @@
     }
     await saveSettings(s);
     localStorage.removeItem(CONFIG_HASH_KEY);
-    configChanged = false;
-    updateBanner.classList.add('banner--hidden');
     showCaptureScreen();
     attemptFlush();
     checkConfigVersion(); // store the server's current hash baseline immediately
@@ -629,89 +627,58 @@
   });
   setInterval(attemptFlush, FLUSH_INTERVAL_MS);
 
-  // ---------- Auto-update manager ----------
-  const updateBanner    = document.getElementById('updateBanner');
-  const updateBannerMsg = document.getElementById('updateBannerMsg');
-  const updateNowBtn    = document.getElementById('updateNowBtn');
 
-  const CONFIG_POLL_MS    = 5 * 60 * 1000;   // poll /api/version every 5 min
-  const SW_CHECK_MS       = 60 * 1000;        // nudge SW to check for updates every 60 s
 
-  let pendingSwUpdate = false;  // a new SW is waiting
-  let configChanged   = false;  // server config fingerprint changed
+  // ---------- Silent auto-update ----------
+  // Strategy:
+  //   1. On every load, check for a new SW immediately via reg.update().
+  //   2. Because the SW always calls skipWaiting() on install, a new SW
+  //      activates right away and fires 'controllerchange' on this page.
+  //   3. 'controllerchange' reloads the page — the user gets fresh assets
+  //      with zero prompts or banners.
+  //   4. If the app is left open, it reloads itself every hour (only when
+  //      the upload queue is clear so nothing in-flight is interrupted).
 
-  // Show the update banner with appropriate message. If the queue is empty
-  // and the trigger is a new SW, auto-reload silently. Otherwise surface the
-  // banner so the user can choose when to update (after their current upload).
-  async function handleUpdateAvailable(reason) {
-    const queueItems = await pqGetAll();
-    const queued     = queueItems.filter(r => r.status !== 'uploaded').length;
+  const SW_CHECK_MS   = 60 * 1000;        // nudge SW every 60 s while open
+  const RELOAD_AGE_MS = 60 * 60 * 1000;   // reload if open longer than 1 hour
+  const APP_OPEN_TIME = Date.now();
 
-    if (reason === 'sw') {
-      updateBannerMsg.textContent = queued > 0
-        ? `A new version is ready. Tap to update after your ${queued} pending upload${queued > 1 ? 's finish' : ' finishes'}.`
-        : 'A new version is ready.';
-    } else {
-      updateBannerMsg.textContent = queued > 0
-        ? 'Server settings have changed. Tap to reload after your uploads finish.'
-        : 'Server settings have changed — reloading…';
-    }
-
-    updateBanner.classList.remove('banner--hidden');
-
-    // Auto-reload only when nothing is at risk of being lost.
-    if (queued === 0) {
-      await new Promise(r => setTimeout(r, reason === 'sw' ? 400 : 1200));
-      applyUpdate();
-    }
-  }
-
-  function applyUpdate() {
-    if (pendingSwUpdate && swRegistration && swRegistration.waiting) {
-      // Tell the waiting SW to activate; it will broadcast SW_UPDATED once it
-      // has claimed all clients, and the message handler below reloads the page.
-      swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
-    } else {
-      // Config-only change or SW already active — a plain reload picks up any
-      // new cached assets and re-runs settings validation.
-      location.reload();
-    }
-  }
-
-  updateNowBtn.addEventListener('click', applyUpdate);
-
-  // SW update detection — fires when a new SW finishes downloading.
-  function trackSwRegistration(reg) {
-    function onWaiting() {
-      pendingSwUpdate = true;
-      handleUpdateAvailable('sw');
-    }
-    if (reg.waiting) { onWaiting(); return; }
-    reg.addEventListener('updatefound', () => {
-      const newSw = reg.installing;
-      if (!newSw) return;
-      newSw.addEventListener('statechange', () => {
-        if (newSw.state === 'installed' && navigator.serviceWorker.controller) {
-          onWaiting();
-        }
-      });
-    });
-  }
-
-  // Reload when the new SW broadcasts SW_UPDATED after claiming clients.
-  navigator.serviceWorker.addEventListener('message', (event) => {
-    if (!event.data) return;
-    if (event.data.type === 'queue-updated') { renderQueue(); return; }
-    if (event.data.type === 'SW_UPDATED')    { location.reload(); }
+  // Reload the page whenever a new SW takes over (fires after skipWaiting +
+  // clients.claim()). Guard with hadController so we only reload on *updates*,
+  // not on the very first install (where there was no previous controller to
+  // replace and a reload would just interrupt the user's first-time setup).
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController) window.location.reload();
   });
 
-  // Periodically nudge the SW to check for updates (browser normally does this
-  // on navigation, which rarely happens in a single-page PWA).
-  function startSwUpdatePolling(reg) {
+  // SW messages (background sync queue notifications).
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'queue-updated') renderQueue();
+  });
+
+  function startAutoUpdate(reg) {
+    // Check for a new SW immediately on load, then every minute.
+    reg.update().catch(() => {});
     setInterval(() => reg.update().catch(() => {}), SW_CHECK_MS);
   }
 
-  // Config version polling — detect server restarts, key rotations, etc.
+  // Hourly reload — quietly refresh so cached assets and settings stay fresh.
+  // Skips if the queue has items waiting to upload.
+  function startHourlyReload() {
+    setInterval(async () => {
+      const elapsed = Date.now() - APP_OPEN_TIME;
+      if (elapsed < RELOAD_AGE_MS) return;
+      const all    = await pqGetAll();
+      const queued = all.filter(r => r.status !== 'uploaded').length;
+      if (queued === 0) window.location.reload();
+      // If items are queued, the interval will keep firing and retry each hour.
+    }, 60 * 1000); // check every minute so we catch the hour mark promptly
+  }
+
+  // Config version polling — detect server restarts / key rotations.
+  // On change, reload silently (queue check first) so the user picks up any
+  // new config on next settings save without needing to do anything.
   async function checkConfigVersion() {
     const s = loadSettings();
     if (!settingsComplete(s)) return;
@@ -720,23 +687,19 @@
       if (!res.ok) return;
       const { configHash } = await res.json();
       const stored = localStorage.getItem(CONFIG_HASH_KEY);
-      if (!stored) {
-        // First time seeing this server — just store the hash, no alert.
+      if (!stored) { localStorage.setItem(CONFIG_HASH_KEY, configHash); return; }
+      if (stored !== configHash) {
         localStorage.setItem(CONFIG_HASH_KEY, configHash);
-        return;
+        const all    = await pqGetAll();
+        const queued = all.filter(r => r.status !== 'uploaded').length;
+        if (queued === 0) window.location.reload();
+        // If queue isn't clear, the hourly reload will eventually pick it up.
       }
-      if (stored !== configHash && !configChanged) {
-        configChanged = true;
-        localStorage.setItem(CONFIG_HASH_KEY, configHash);
-        handleUpdateAvailable('config');
-      }
-    } catch { /* offline or server unreachable — ignore */ }
+    } catch { /* offline — ignore */ }
   }
 
-  function startConfigPolling() {
-    checkConfigVersion();
-    setInterval(checkConfigVersion, CONFIG_POLL_MS);
-  }
+  // ---------- Install prompt ----------
+  const installBtn = document.getElementById('installBtn');
   let deferredInstallPrompt = null;
   window.addEventListener('beforeinstallprompt', e => {
     e.preventDefault();
@@ -757,15 +720,17 @@
     window.addEventListener('load', async () => {
       try {
         swRegistration = await navigator.serviceWorker.register('service-worker.js');
-        trackSwRegistration(swRegistration);
-        startSwUpdatePolling(swRegistration);
+        startAutoUpdate(swRegistration);
+        startHourlyReload();
+        checkConfigVersion();
+        setInterval(checkConfigVersion, 5 * 60 * 1000);
       } catch (err) {
         console.warn('SW registration failed:', err);
       }
     });
   }
 
-  startConfigPolling();
+
 
   updateOnlineStatus();
   init();

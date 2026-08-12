@@ -35,7 +35,7 @@ Secret=localuser
 Secret=localpassword
 
 # 5. Enable auto-updates via 'podman auto-update'
-AutoUpdate=local
+AutoUpdate=registry
 
 # 6. Configure a systemd-managed restart policy
 # Note: Quadlet uses systemd's 'Restart=' key in the [Service] section instead of podman's '--restart' flag.

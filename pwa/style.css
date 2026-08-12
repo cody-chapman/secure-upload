@@ -441,28 +441,7 @@ button { font-family: inherit; }
   color: #fff;
 }
 
-/* Update available */
-.banner--update {
-  background: var(--navy);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.banner__btn {
-  border: 1.5px solid rgba(255,255,255,0.5);
-  background: transparent;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 4px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.banner__btn:hover { background: rgba(255,255,255,0.15); }
+
 
 /* ---------- Install button ---------- */
 .install-btn {

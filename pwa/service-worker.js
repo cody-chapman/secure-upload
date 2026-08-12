@@ -1,6 +1,6 @@
 importScripts('idb-queue.js');
 
-const CACHE_NAME = 'photo-upload-shell-v5';
+const CACHE_NAME = 'secure-upload-shell-v1';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -15,43 +15,38 @@ const SHELL_FILES = [
   './icons/icon-512.png',
 ];
 
+// Install: cache the app shell and activate immediately.
+// No user confirmation needed — the page reloads automatically via controllerchange.
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_FILES))
   );
-  // Don't skipWaiting here — we let the page decide when it's safe to activate
-  // (e.g. after the upload queue drains) via a SKIP_WAITING message.
+  self.skipWaiting();
 });
 
+// Activate: purge old caches and claim all open tabs at once.
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    Promise.all([
+      caches.keys().then((keys) =>
+        Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      ),
+      self.clients.claim(),
+    ])
   );
-  self.clients.claim().then(async () => {
-    // Tell every open tab to reload now that the new SW is in control.
-    const clients = await self.clients.matchAll({ type: 'window' });
-    clients.forEach((c) => c.postMessage({ type: 'SW_UPDATED' }));
-  });
 });
 
+// Fetch: serve shell from cache, refresh cache in the background.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-
-  // Only handle GET requests for our own app shell. Everything else
-  // (uploads, health checks, cross-origin API calls) goes straight to the network.
-  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) {
-    return;
-  }
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
 
   event.respondWith(
     caches.match(req).then((cached) => {
       const networkFetch = fetch(req)
         .then((res) => {
           if (res && res.status === 200) {
-            const copy = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, res.clone()));
           }
           return res;
         })
@@ -61,24 +56,20 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Fired by the browser/OS when connectivity returns, even if no tab is open
-// (supported on Android Chrome/Edge and desktop Chromium; iOS Safari does not
-// support Background Sync, so there the queue flushes when the app is reopened).
+// Background Sync: flush offline photo queue when connectivity returns.
 self.addEventListener('sync', (event) => {
   if (event.tag === 'flush-photo-queue') {
-    event.waitUntil(pqFlush().then(notifyClients));
+    event.waitUntil(
+      pqFlush().then(() => notifyClients({ type: 'queue-updated' }))
+    );
   }
 });
 
-async function notifyClients() {
-  const clients = await self.clients.matchAll();
-  clients.forEach((c) => c.postMessage({ type: 'queue-updated' }));
-}
-
-// Page sends SKIP_WAITING when the user confirms the update and the queue is safe.
-// SW immediately takes over all clients, then each client reloads itself.
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
+  // No SKIP_WAITING message needed anymore — we skip immediately on install.
 });
+
+async function notifyClients(msg) {
+  const clients = await self.clients.matchAll({ type: 'window' });
+  clients.forEach((c) => c.postMessage(msg));
+}
